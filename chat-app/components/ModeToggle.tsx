@@ -1,18 +1,101 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { Moon, Sun } from "lucide-react"
-import { useTheme } from "next-themes"
-import { Button } from "@/components/ui/basic"
+import * as React from "react";
+import { useTheme } from "next-themes";
+import { flushSync } from "react-dom";
+import { cn } from "@/lib/utils";
+import { Sun, Moon } from "lucide-react";
 
-export function ModeToggle() {
-    const { setTheme, theme } = useTheme()
-
-    return (
-        <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            <Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-            <Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            <span className="sr-only">Toggle theme</span>
-        </Button>
-    )
+interface ModeToggleProps {
+  className?: string;
 }
+
+const ModeToggle = ({ className }: ModeToggleProps) => {
+  const { setTheme, theme } = useTheme();
+  const ref = React.useRef<HTMLButtonElement>(null);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  async function themeToggle() {
+    if (!ref.current) return;
+
+    if (!document.startViewTransition) {
+      setTheme(theme === "dark" ? "light" : "dark");
+      return;
+    }
+
+    await document.startViewTransition(() => {
+      flushSync(() => {
+        setTheme(theme === "dark" ? "light" : "dark");
+      });
+    }).ready;
+
+    const { top, left, width, height } = ref.current.getBoundingClientRect();
+    const right = window.innerWidth - left;
+    const bottom = window.innerHeight - top;
+    const maxRadius = Math.hypot(Math.max(right, left), Math.max(bottom, top));
+
+    document.documentElement.animate(
+      {
+        clipPath: [
+          `circle(0px at ${left + width / 2}px ${top + height / 2}px)`,
+          `circle(${maxRadius}px at ${left + width / 2}px ${top + height / 2}px)`,
+        ],
+      },
+      {
+        duration: 600,
+        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+        pseudoElement: "::view-transition-new(root)",
+      }
+    );
+  }
+
+  if (!mounted) {
+    return (
+      <button
+        ref={ref}
+        className={cn(
+          "relative h-12 w-12 rounded-full bg-[#D4FF90]/20 border border-[#D4FF90]/30 flex items-center justify-center",
+          className
+        )}
+        disabled
+      >
+        <div className="h-5 w-5 animate-pulse bg-[#D4FF90]/50 rounded-full" />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      ref={ref}
+      onClick={themeToggle}
+      className={cn(
+        "relative h-12 w-12 rounded-full bg-white dark:bg-black border border-[#D4FF90]/30 hover:border-[#D4FF90] flex items-center justify-center overflow-hidden transition-all duration-300 hover:scale-110 hover:shadow-lg hover:shadow-[#D4FF90]/20 group",
+        className
+      )}
+      aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      type="button"
+    >
+      <Sun 
+        className={cn(
+          "h-5 w-5 text-black absolute transition-all duration-500 rotate-0 scale-100 dark:-rotate-90 dark:scale-0",
+          "group-hover:rotate-12 group-hover:text-[#D4FF90]"
+        )} 
+      />
+      <Moon 
+        className={cn(
+          "h-5 w-5 text-white absolute transition-all duration-500 rotate-90 scale-0 dark:rotate-0 dark:scale-100",
+          "group-hover:-rotate-12 group-hover:text-[#D4FF90]"
+        )} 
+      />
+      
+      {/* Lime glow effect */}
+      <div className="absolute inset-0 rounded-full bg-[#D4FF90]/0 group-hover:bg-[#D4FF90]/10 transition-colors duration-300" />
+    </button>
+  );
+};
+
+export default ModeToggle;

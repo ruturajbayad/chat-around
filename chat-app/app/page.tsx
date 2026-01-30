@@ -1,9 +1,5 @@
-import GroupList from "@/components/GroupList";
+import Preloader from "@/components/Preloader";
 
 export default function Home() {
-  return (
-    <main className="min-h-screen bg-background pb-20 selection:bg-primary selection:text-primary-foreground">
-      <GroupList />
-    </main>
-  );
+  return <Preloader />;
 }
