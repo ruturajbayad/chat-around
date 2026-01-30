@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { importKey, encryptMessage, decryptMessage } from '@/lib/crypto';
 import { Button, Input, Card } from './ui/basic';
-import { Send, ArrowLeft, Reply, X, Users } from 'lucide-react';
+import { Send, ArrowLeft, Reply, X, Users, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, PanInfo } from "framer-motion";
 import ModeToggle from "./ModeToggle";
@@ -452,7 +452,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
 
                 {/* Messages Container */}
                 <div className="flex-1 overflow-y-auto p-4 scroll-smooth pb-24">
-                    <div className="max-w-2xl mx-auto space-y-6">
+                    <div className="max-w-2xl mx-auto space-y-1"> {/* Reduced space-y for grouped feel */}
                         {messages.map((msg, index) => {
                             if (msg.isSystem) {
                                 return (
@@ -465,6 +465,16 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                             }
 
                             const isMe = msg.sender === username;
+                            const prevMsg = messages[index - 1];
+
+                            // Grouping Logic: Same sender && Same Minute
+                            const prevTimeString = prevMsg ? new Date(prevMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                            const currTimeString = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                            const isSameSender = prevMsg && prevMsg.sender === msg.sender;
+                            const isSameTime = prevTimeString === currTimeString;
+
+                            // Show Header if: NOT same sender OR NOT same minute OR previous was system
+                            const showHeader = !isSameSender || !isSameTime || prevMsg.isSystem;
 
                             return (
                                 <motion.div
@@ -474,7 +484,8 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                                     animate={{ opacity: 1, y: 0 }}
                                     className={cn(
                                         "group flex w-full relative items-center",
-                                        isMe ? "flex-row-reverse" : "flex-row"
+                                        isMe ? "flex-row-reverse" : "flex-row",
+                                        showHeader ? "mt-6" : "mt-1" // Extra margin for new groups
                                     )}
                                 >
                                     {/* Swipe Action Background (Reply Icon) */}
@@ -502,31 +513,36 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                                         style={{ x: 0 }} // Reset position after drag
                                         whileDrag={{ x: 50 }} // Visual feedback during drag
                                     >
-                                        {/* Avatar */}
+                                        {/* Avatar: Show only if it's the TOP message of the group (showHeader) */}
                                         <div className={cn(
-                                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-bold shadow-sm select-none",
-                                            getAvatarColor(msg.sender)
+                                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-bold shadow-sm select-none transition-opacity",
+                                            getAvatarColor(msg.sender),
+                                            showHeader ? "opacity-100" : "opacity-0 invisible" // Invisible to keep spacing
                                         )}>
                                             {msg.sender[0].toUpperCase()}
                                         </div>
 
                                         {/* Message Bubble Container */}
                                         <div className={cn("flex flex-col max-w-[75%]", isMe ? "items-end" : "items-start")}>
-                                            <div className="flex items-baseline gap-2 mb-1 px-1">
-                                                <span className="text-xs font-semibold text-foreground/80">{msg.sender}</span>
-                                                <span className="text-[9px] text-muted-foreground">
-                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                </span>
-                                            </div>
+                                            {showHeader && (
+                                                <div className="flex items-baseline gap-2 mb-1 px-1">
+                                                    <span className="text-xs font-semibold text-foreground/80">{msg.sender}</span>
+                                                    <span className="text-[9px] text-muted-foreground">
+                                                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                </div>
+                                            )}
 
                                             {/* Reply action button (Desktop Hover) */}
                                             <div className="relative group/bubble">
                                                 <div
                                                     className={cn(
-                                                        "relative px-4 py-2.5 shadow-sm text-sm break-words leading-relaxed",
+                                                        "relative px-4 py-2.5 shadow-sm text-sm break-words whitespace-pre-wrap leading-relaxed", // Added whitespace-pre-wrap
                                                         isMe
                                                             ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-sm"
-                                                            : "bg-secondary border border-border rounded-2xl rounded-tl-sm text-foreground"
+                                                            : "bg-secondary border border-border rounded-2xl rounded-tl-sm text-foreground",
+                                                        !showHeader && isMe && "rounded-tr-2xl", // Round corners if middle of group
+                                                        !showHeader && !isMe && "rounded-tl-2xl"
                                                     )}
                                                 >
                                                     {msg.content.replyTo && (

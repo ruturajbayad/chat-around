@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Button, Card, CardContent } from './ui/basic';
-import { Users, MessageSquarePlus, LogIn, Zap } from 'lucide-react';
+import { Users, MessageSquarePlus, LogIn, Zap, Plus } from 'lucide-react';
 import CreateGroupModal from './CreateGroupModal';
 import ModeToggle from './ModeToggle';
 
@@ -59,7 +59,7 @@ export default function GroupList() {
         <div className="min-h-screen bg-background relative overflow-hidden animate-in fade-in duration-700">
             <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 lg:py-12 space-y-8 sm:space-y-12 relative z-10">
                 {/* Header */}
-                <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 sm:gap-6 border-b border-border/40 pb-6 sm:pb-8">
+                <header className="flex flex-row justify-between items-center gap-4 border-b border-border/40 pb-6 sm:pb-8">
                     <div className="space-y-2 sm:space-y-4">
                         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight text-foreground flex items-center gap-3">
                             Chat Around
@@ -67,17 +67,9 @@ export default function GroupList() {
                         </h1>
                     </div>
 
-                    <div className="flex items-center gap-3 sm:gap-4 w-full md:w-auto">
+                    <div className="flex items-center gap-3 sm:gap-4 md:w-auto">
                         <ModeToggle />
-                        <Button
-                            size="lg"
-                            onClick={() => setShowCreateModal(true)}
-                            className="rounded-full px-6 sm:px-8 font-bold text-sm sm:text-md bg-foreground text-background hover:bg-foreground/90 shadow-lg hover:scale-105 transition-all flex-1 md:flex-initial h-12"
-                        >
-                            <MessageSquarePlus className="mr-2 h-4 w-4 sm:h-5 sm:w-5" />
-                            <span className="hidden sm:inline">Create Group</span>
-                            <span className="sm:hidden">Create</span>
-                        </Button>
+
                     </div>
                 </header>
 
@@ -160,6 +152,15 @@ export default function GroupList() {
                     </div>
                 )}
             </div>
+
+            {/* Floating Action Button (FAB) for Create Group */}
+            <Button
+                size="icon"
+                onClick={() => setShowCreateModal(true)}
+                className="fixed bottom-8 right-8 z-50 rounded-full h-14 w-14 sm:h-16 sm:w-16 shadow-2xl bg-foreground text-background hover:bg-foreground/90 hover:scale-110 transition-all duration-300"
+            >
+                <Plus className="h-6 w-6 sm:h-8 sm:w-8" />
+            </Button>
 
             {showCreateModal && <CreateGroupModal onClose={() => setShowCreateModal(false)} />}
         </div>
