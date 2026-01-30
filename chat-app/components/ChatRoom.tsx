@@ -375,8 +375,10 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
     }
 
     // Mention Filtering Logic
+    // Mention Filtering Logic
     const mentionMatch = input.match(/@(\w*)$/);
-    const showMentions = mentionMatch ? true : false;
+    const hasPreviousMention = input.replace(/@(\w*)$/, '').includes('@');
+    const showMentions = mentionMatch && !hasPreviousMention ? true : false;
     const mentionQuery = mentionMatch ? mentionMatch[1].toLowerCase() : '';
     const filteredParticipants = participants.filter(p => p.toLowerCase().includes(mentionQuery) && p !== username);
 
@@ -404,9 +406,9 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
     };
 
     return (
-        <div className="flex h-[100dvh] w-full bg-background relative overflow-hidden">
-            {/* Main Chat Area - Flexible Sidebar Sibling */}
-            <div className="flex-1 flex flex-col h-full min-w-0 transition-all duration-300 ease-in-out relative">
+        <div className="fixed inset-0 w-full bg-background overflow-hidden flex">
+            {/* Main Chat Area */}
+            <div className="flex-1 flex flex-col min-w-0 relative">
                 {/* Header */}
                 <header className="px-4 py-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20 flex items-center justify-between transition-colors shadow-sm shrink-0">
                     <div className="flex items-center gap-3">
@@ -449,7 +451,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                 </header>
 
                 {/* Messages Container */}
-                <div className="flex-1 overflow-y-auto p-4 scroll-smooth">
+                <div className="flex-1 overflow-y-auto p-4 scroll-smooth pb-24">
                     <div className="max-w-2xl mx-auto space-y-6">
                         {messages.map((msg, index) => {
                             if (msg.isSystem) {
@@ -573,7 +575,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                 </div>
 
                 {/* Input Area */}
-                <div className="p-4 border-t bg-background/95 backdrop-blur z-20 shrink-0">
+                <div className="absolute bottom-0 left-0 right-0 p-4 border-t bg-background/95 backdrop-blur z-20">
                     <div className="max-w-2xl mx-auto space-y-2 relative">
 
                         {showMentions && filteredParticipants.length > 0 && (
@@ -633,49 +635,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                         </form>
                     </div>
                 </div>
-                {/* Right Sidebar for Participants - Responsive & Collapsible */}
-                <div className={cn(
-                    "border-l border-border/50 bg-background/95 backdrop-blur transition-all duration-300 ease-in-out overflow-hidden flex flex-col",
-                    showParticipants ? "w-72 opacity-100" : "w-0 opacity-0"
-                )}>
-                    <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0 h-[61px]">
-                        <h3 className="font-bold flex items-center gap-2 truncate">
-                            Participants
-                            <span className="bg-secondary text-secondary-foreground text-[10px] px-2 py-0.5 rounded-full">{participants.length}</span>
-                        </h3>
-                        <Button variant="ghost" size="icon" onClick={() => setShowParticipants(false)} className="h-8 w-8 rounded-full shrink-0">
-                            <X className="h-4 w-4" />
-                        </Button>
-                    </div>
 
-                    <div className="flex-1 overflow-y-auto p-2 min-w-[18rem]">
-                        <div className="space-y-1">
-                            {participants.length > 0 ? participants.map((p, i) => (
-                                <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 cursor-pointer group transition-colors" onClick={() => {
-                                    insertMention(p);
-                                    if (window.innerWidth < 768) setShowParticipants(false);
-                                }}>
-                                    <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(p))}>
-                                        {p[0].toUpperCase()}
-                                    </div>
-                                    <div className="flex flex-col">
-                                        <span className={cn("text-sm font-medium", p === username ? "text-primary" : "text-foreground")}>
-                                            {p} {p === username && "(You)"}
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground group-hover:text-primary/70 transition-colors">
-                                            Online
-                                        </span>
-                                    </div>
-                                </div>
-                            )) : (
-                                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground space-y-2 opacity-50">
-                                    <Users className="h-8 w-8 mb-2" />
-                                    <span className="text-xs">No active participants</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
 
                 {/* Mobile Overlay Background (Optional) */}
                 {showParticipants && (
@@ -761,6 +721,50 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                         </Card>
                     </div>
                 )}
+            </div>
+
+            {/* Right Sidebar for Participants - Responsive & Collapsible */}
+            <div className={cn(
+                "border-l border-border/50 bg-background/95 backdrop-blur transition-all duration-300 ease-in-out overflow-hidden hidden md:flex flex-col z-20 shadow-xl",
+                showParticipants ? "w-72 opacity-100" : "w-0 opacity-0"
+            )}>
+                <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0 h-[61px]">
+                    <h3 className="font-bold flex items-center gap-2 truncate">
+                        Participants
+                        <span className="bg-secondary text-secondary-foreground text-[10px] px-2 py-0.5 rounded-full">{participants.length}</span>
+                    </h3>
+                    <Button variant="ghost" size="icon" onClick={() => setShowParticipants(false)} className="h-8 w-8 rounded-full shrink-0">
+                        <X className="h-4 w-4" />
+                    </Button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2 min-w-[18rem]">
+                    <div className="space-y-1">
+                        {participants.length > 0 ? participants.map((p, i) => (
+                            <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 cursor-pointer group transition-colors" onClick={() => {
+                                insertMention(p);
+                                if (window.innerWidth < 768) setShowParticipants(false);
+                            }}>
+                                <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(p))}>
+                                    {p[0].toUpperCase()}
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className={cn("text-sm font-medium", p === username ? "text-primary" : "text-foreground")}>
+                                        {p} {p === username && "(You)"}
+                                    </span>
+                                    <span className="text-[10px] text-muted-foreground group-hover:text-primary/70 transition-colors">
+                                        Online
+                                    </span>
+                                </div>
+                            </div>
+                        )) : (
+                            <div className="flex flex-col items-center justify-center h-40 text-muted-foreground space-y-2 opacity-50">
+                                <Users className="h-8 w-8 mb-2" />
+                                <span className="text-xs">No active participants</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
         </div>
     );
