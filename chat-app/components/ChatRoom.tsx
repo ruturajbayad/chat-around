@@ -7,7 +7,8 @@ import { importKey, encryptMessage, decryptMessage } from '@/lib/crypto';
 import { Button, Input, Card } from './ui/basic';
 import { Send, ArrowLeft, Reply, X, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ModeToggle } from './ModeToggle';
+import { motion, PanInfo } from "framer-motion";
+import ModeToggle from "./ModeToggle";
 
 interface ReplyContext {
     id: string;
@@ -44,7 +45,7 @@ const getAvatarColor = (name: string) => {
     return colors[Math.abs(hash) % colors.length];
 };
 
-export default function ChatRoom({ groupId }: { groupId: string }) {
+export default function ChatRoom({ groupId, groupName }: { groupId: string; groupName: string }) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [username, setUsername] = useState('');
@@ -54,12 +55,39 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
     const [showParticipants, setShowParticipants] = useState(false);
     const [key, setKey] = useState<CryptoKey | null>(null);
     const [error, setError] = useState('');
+    const [joinError, setJoinError] = useState('');
+    const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
     const [replyingTo, setReplyingTo] = useState<Message | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const router = useRouter();
+
+    const confirmLeave = () => {
+        router.push('/groups');
+    };
+
+    const handleExitRequest = () => {
+        if (isJoined) {
+            setShowLeaveConfirm(true);
+        } else {
+            router.push('/groups');
+        }
+    };
+
+    // Warn on browser refresh/close
+    useEffect(() => {
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+            if (isJoined) {
+                e.preventDefault();
+                e.returnValue = ''; // Trigger browser confirmation dialog
+            }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [isJoined]);
 
     // Auto-focus input when applying a reply
     useEffect(() => {
@@ -92,13 +120,14 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
     }, []);
 
     // Supabase Realtime Logic
+    // Supabase Realtime Logic
     useEffect(() => {
-        if (!key || !isJoined || !username) return;
+        if (!key) return;
 
         const channel = supabase.channel(`room:${groupId}`, {
             config: {
                 presence: {
-                    key: username,
+                    key: isJoined ? username : undefined,
                 },
             },
         });
@@ -137,7 +166,7 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
             .on('broadcast', { event: 'message' }, ({ payload }) => handleMessage(payload))
             .on('presence', { event: 'sync' }, () => {
                 const newState = channel.presenceState();
-                const users = Object.keys(newState);
+                const users = Object.keys(newState).filter(k => k && k !== 'undefined');
                 // Also get the raw presence data to extract usernames if keys are unique IDs
                 // In our config: key: username. So keys are usernames.
                 setParticipants(users);
@@ -163,14 +192,65 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
             })
             .subscribe(async (status) => {
                 if (status === 'SUBSCRIBED') {
-                    await channel.track({ online_at: new Date().toISOString() });
+                    if (isJoined && username) {
+                        await channel.track({ online_at: new Date().toISOString() });
+                    }
                 }
             });
 
+        let heartbeatInterval: NodeJS.Timeout;
+
+        if (isJoined && username) {
+            // 1. Notify server we joined (Increment Count)
+            fetch(`/api/groups/${groupId}/membership`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'join' })
+            }).catch(e => console.error('Join failed', e));
+
+            // Start Heartbeat
+            heartbeatInterval = setInterval(async () => {
+                try {
+                    await fetch('/api/groups/heartbeat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ groupId })
+                    });
+                } catch (e) {
+                    console.error('Heartbeat failed', e);
+                }
+            }, 60000); // Ping every 1 minute
+
+            // Initial ping
+            fetch('/api/groups/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ groupId })
+            }).catch(err => console.error(err));
+        }
+
         return () => {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
             supabase.removeChannel(channel);
+
+            if (isJoined) {
+                // 3. Notify server we left (Decrement/Delete)
+                // Use sendBeacon for reliability on unload
+                const data = JSON.stringify({ action: 'leave' });
+                if (navigator.sendBeacon) {
+                    const blob = new Blob([data], { type: 'application/json' });
+                    navigator.sendBeacon(`/api/groups/${groupId}/membership`, blob);
+                } else {
+                    fetch(`/api/groups/${groupId}/membership`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        keepalive: true, // Critical for unload
+                        body: data
+                    }).catch(e => console.error('Leave failed', e));
+                }
+            }
         };
-    }, [key, isJoined, groupId, username]);
+    }, [key, isJoined, groupId]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -178,7 +258,17 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
 
     const handleJoin = (e: React.FormEvent) => {
         e.preventDefault();
-        if (username.trim()) setIsJoined(true);
+        const trimmedName = username.trim();
+        if (!trimmedName) return;
+
+        // Check if username is taken
+        if (participants.some(p => p.toLowerCase() === trimmedName.toLowerCase())) {
+            setJoinError(`Username "${trimmedName}" is already taken.`);
+            setTimeout(() => setJoinError(''), 3000); // Clear error after 3s
+            return;
+        }
+
+        setIsJoined(true);
     };
 
     const sendMessage = async (e: React.FormEvent) => {
@@ -232,7 +322,7 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
                 <Card className="p-8 text-center max-w-sm border-destructive/50">
                     <h2 className="text-xl font-bold text-destructive mb-2">Access Denied</h2>
                     <p className="mb-4 text-muted-foreground">{error}</p>
-                    <Button onClick={() => router.push('/')}>Return Home</Button>
+                    <Button onClick={() => router.push('/groups')}>Return to Groups</Button>
                 </Card>
             </div>
         );
@@ -254,19 +344,30 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
                             <Input
                                 placeholder="Username"
                                 value={username}
-                                onChange={e => setUsername(e.target.value.replace(/\s/g, ''))}
+                                onChange={e => {
+                                    setUsername(e.target.value.replace(/\s/g, ''));
+                                    setJoinError('');
+                                }}
                                 autoFocus
                                 required
                                 maxLength={15}
-                                className="pl-7 bg-secondary border-border focus-visible:ring-ring h-11"
+                                className={cn(
+                                    "pl-7 bg-secondary border-border focus-visible:ring-ring h-11",
+                                    joinError && "border-destructive focus-visible:ring-destructive"
+                                )}
                             />
                         </div>
+                        {joinError && (
+                            <p className="text-xs text-destructive font-medium animate-in slide-in-from-top-1">
+                                {joinError}
+                            </p>
+                        )}
                         <Button type="submit" className="w-full font-bold shadow-lg" size="lg">
                             Enter Group
                         </Button>
                     </form>
                     <div className="pt-2 text-center">
-                        <Button variant="link" className="text-muted-foreground text-xs" onClick={() => router.push('/')}>Cancel</Button>
+                        <Button variant="link" className="text-muted-foreground text-xs" onClick={() => router.push('/groups')}>Cancel</Button>
                     </div>
                 </Card>
             </div>
@@ -303,19 +404,24 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
     };
 
     return (
-        <div className="flex h-screen w-full bg-background relative overflow-hidden">
+        <div className="flex h-[100dvh] w-full bg-background relative overflow-hidden">
             {/* Main Chat Area - Flexible Sidebar Sibling */}
             <div className="flex-1 flex flex-col h-full min-w-0 transition-all duration-300 ease-in-out relative">
                 {/* Header */}
                 <header className="px-4 py-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20 flex items-center justify-between transition-colors shadow-sm shrink-0">
                     <div className="flex items-center gap-3">
-                        <Button variant="ghost" size="icon" onClick={() => router.push('/')} className="hover:bg-accent rounded-full -ml-2 text-muted-foreground hover:text-foreground">
+                        <Button variant="ghost" size="icon" onClick={handleExitRequest} className="hover:bg-accent rounded-full -ml-2 text-muted-foreground hover:text-foreground">
                             <ArrowLeft className="h-5 w-5" />
                         </Button>
                         <div>
-                            <h2 className="font-bold text-sm md:text-base leading-tight flex items-center gap-2">
-                                Group Chat
-                            </h2>
+                            <div className="flex flex-col">
+                                <h2 className="font-bold text-sm md:text-base leading-tight truncate max-w-[200px] md:max-w-md">
+                                    {groupName || "Group Chat"}
+                                </h2>
+                                {groupName && (
+                                    <span className="text-[10px] text-muted-foreground font-medium">Chat Room</span>
+                                )}
+                            </div>
                             <div className="flex items-center text-[10px] md:text-xs text-muted-foreground font-medium animate-in fade-in">
                                 <span className="relative flex h-2 w-2 mr-1.5">
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -359,78 +465,107 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
                             const isMe = msg.sender === username;
 
                             return (
-                                <div
+                                <motion.div
                                     key={msg.id}
+                                    layout
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
                                     className={cn(
-                                        "group flex w-full gap-3 animate-in slide-in-from-bottom-2 duration-300",
+                                        "group flex w-full relative items-center",
                                         isMe ? "flex-row-reverse" : "flex-row"
                                     )}
                                 >
-                                    {/* Avatar */}
+                                    {/* Swipe Action Background (Reply Icon) */}
                                     <div className={cn(
-                                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-bold shadow-sm select-none",
-                                        getAvatarColor(msg.sender)
+                                        "absolute flex items-center justify-center w-10 h-10 rounded-full transition-opacity duration-200",
+                                        isMe ? "right-full mr-2 opacity-0" : "left-0 -ml-12 opacity-0"
                                     )}>
-                                        {msg.sender[0].toUpperCase()}
+                                        <Reply className="h-5 w-5 text-muted-foreground" />
                                     </div>
 
-                                    {/* Message Bubble Container */}
-                                    <div className={cn("flex flex-col max-w-[75%]", isMe ? "items-end" : "items-start")}>
-                                        <div className="flex items-baseline gap-2 mb-1 px-1">
-                                            <span className="text-xs font-semibold text-foreground/80">{msg.sender}</span>
-                                            <span className="text-[9px] text-muted-foreground">
-                                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </span>
+                                    {/* Draggable Message Container */}
+                                    <motion.div
+                                        drag="x"
+                                        dragConstraints={{ left: 0, right: 0 }}
+                                        dragElastic={0.2}
+                                        onDragEnd={(e: any, info: PanInfo) => {
+                                            if (info.offset.x > 50) {
+                                                setReplyingTo(msg);
+                                            }
+                                        }}
+                                        className={cn(
+                                            "flex gap-3 w-full relative z-10",
+                                            isMe ? "flex-row-reverse" : "flex-row"
+                                        )}
+                                        style={{ x: 0 }} // Reset position after drag
+                                        whileDrag={{ x: 50 }} // Visual feedback during drag
+                                    >
+                                        {/* Avatar */}
+                                        <div className={cn(
+                                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white text-xs font-bold shadow-sm select-none",
+                                            getAvatarColor(msg.sender)
+                                        )}>
+                                            {msg.sender[0].toUpperCase()}
                                         </div>
 
-                                        {/* Reply action button */}
-                                        <div className="relative group/bubble">
-                                            <div
-                                                className={cn(
-                                                    "relative px-4 py-2.5 shadow-sm text-sm break-words leading-relaxed",
-                                                    isMe
-                                                        ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-sm"
-                                                        : "bg-secondary border border-border rounded-2xl rounded-tl-sm text-foreground"
-                                                )}
-                                            >
-                                                {msg.content.replyTo && (
-                                                    <div className={cn(
-                                                        "mb-2 p-2 rounded text-xs border-l-2 bg-black/5 dark:bg-white/5",
-                                                        isMe ? "border-primary-foreground/40" : "border-foreground/20"
-                                                    )}>
-                                                        <p className={cn("font-bold mb-0.5 opacity-80", isMe ? "text-primary-foreground" : "text-foreground")}>
-                                                            {msg.content.replyTo.sender}
-                                                        </p>
-                                                        <p className="line-clamp-1 opacity-70 italic">
-                                                            {msg.content.replyTo.text}
-                                                        </p>
-                                                    </div>
-                                                )}
-
-                                                {msg.content.text.split(new RegExp(`(@${username}\\b)`, 'gi')).map((part, i) =>
-                                                    part.toLowerCase() === `@${username}`.toLowerCase() ? (
-                                                        <span key={i} className="bg-primary/20 text-primary font-bold px-1 rounded mx-0.5 border border-primary/30 shadow-[0_0_10px_rgba(var(--primary),0.2)] animate-pulse">
-                                                            {part}
-                                                        </span>
-                                                    ) : (
-                                                        <span key={i}>{part}</span>
-                                                    )
-                                                )}
+                                        {/* Message Bubble Container */}
+                                        <div className={cn("flex flex-col max-w-[75%]", isMe ? "items-end" : "items-start")}>
+                                            <div className="flex items-baseline gap-2 mb-1 px-1">
+                                                <span className="text-xs font-semibold text-foreground/80">{msg.sender}</span>
+                                                <span className="text-[9px] text-muted-foreground">
+                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
                                             </div>
 
-                                            <button
-                                                onClick={() => setReplyingTo(msg)}
-                                                className={cn(
-                                                    "absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/bubble:opacity-100 transition-opacity p-1.5 rounded-full bg-background shadow-sm border hover:bg-accent",
-                                                    isMe ? "-left-10" : "-right-10"
-                                                )}
-                                                title="Reply"
-                                            >
-                                                <Reply className="h-4 w-4 text-muted-foreground" />
-                                            </button>
+                                            {/* Reply action button (Desktop Hover) */}
+                                            <div className="relative group/bubble">
+                                                <div
+                                                    className={cn(
+                                                        "relative px-4 py-2.5 shadow-sm text-sm break-words leading-relaxed",
+                                                        isMe
+                                                            ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-sm"
+                                                            : "bg-secondary border border-border rounded-2xl rounded-tl-sm text-foreground"
+                                                    )}
+                                                >
+                                                    {msg.content.replyTo && (
+                                                        <div className={cn(
+                                                            "mb-2 p-2 rounded text-xs border-l-2 bg-black/5 dark:bg-white/5",
+                                                            isMe ? "border-primary-foreground/40" : "border-foreground/20"
+                                                        )}>
+                                                            <p className={cn("font-bold mb-0.5 opacity-80", isMe ? "text-primary-foreground" : "text-foreground")}>
+                                                                {msg.content.replyTo.sender}
+                                                            </p>
+                                                            <p className="line-clamp-1 opacity-70 italic">
+                                                                {msg.content.replyTo.text}
+                                                            </p>
+                                                        </div>
+                                                    )}
+
+                                                    {msg.content.text.split(new RegExp(`(@${username}\\b)`, 'gi')).map((part, i) =>
+                                                        part.toLowerCase() === `@${username}`.toLowerCase() ? (
+                                                            <span key={i} className="bg-primary/20 text-primary font-bold px-1 rounded mx-0.5 border border-primary/30 shadow-[0_0_10px_rgba(var(--primary),0.2)] animate-pulse">
+                                                                {part}
+                                                            </span>
+                                                        ) : (
+                                                            <span key={i}>{part}</span>
+                                                        )
+                                                    )}
+                                                </div>
+
+                                                <button
+                                                    onClick={() => setReplyingTo(msg)}
+                                                    className={cn(
+                                                        "hidden md:block absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/bubble:opacity-100 transition-opacity p-1.5 rounded-full bg-background shadow-sm border hover:bg-accent",
+                                                        isMe ? "-left-10" : "-right-10"
+                                                    )}
+                                                    title="Reply"
+                                                >
+                                                    <Reply className="h-4 w-4 text-muted-foreground" />
+                                                </button>
+                                            </div>
                                         </div>
-                                    </div>
-                                </div>
+                                    </motion.div>
+                                </motion.div>
                             );
                         })}
                         <div ref={messagesEndRef} />
@@ -498,100 +633,135 @@ export default function ChatRoom({ groupId }: { groupId: string }) {
                         </form>
                     </div>
                 </div>
-            </div>
+                {/* Right Sidebar for Participants - Responsive & Collapsible */}
+                <div className={cn(
+                    "border-l border-border/50 bg-background/95 backdrop-blur transition-all duration-300 ease-in-out overflow-hidden flex flex-col",
+                    showParticipants ? "w-72 opacity-100" : "w-0 opacity-0"
+                )}>
+                    <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0 h-[61px]">
+                        <h3 className="font-bold flex items-center gap-2 truncate">
+                            Participants
+                            <span className="bg-secondary text-secondary-foreground text-[10px] px-2 py-0.5 rounded-full">{participants.length}</span>
+                        </h3>
+                        <Button variant="ghost" size="icon" onClick={() => setShowParticipants(false)} className="h-8 w-8 rounded-full shrink-0">
+                            <X className="h-4 w-4" />
+                        </Button>
+                    </div>
 
-            {/* Right Sidebar for Participants - Responsive & Collapsible */}
-            <div className={cn(
-                "border-l border-border/50 bg-background/95 backdrop-blur transition-all duration-300 ease-in-out overflow-hidden flex flex-col",
-                showParticipants ? "w-72 opacity-100" : "w-0 opacity-0"
-            )}>
-                <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0 h-[61px]">
-                    <h3 className="font-bold flex items-center gap-2 truncate">
-                        Participants
-                        <span className="bg-secondary text-secondary-foreground text-[10px] px-2 py-0.5 rounded-full">{participants.length}</span>
-                    </h3>
-                    <Button variant="ghost" size="icon" onClick={() => setShowParticipants(false)} className="h-8 w-8 rounded-full shrink-0">
-                        <X className="h-4 w-4" />
-                    </Button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-2 min-w-[18rem]">
-                    <div className="space-y-1">
-                        {participants.length > 0 ? participants.map((p, i) => (
-                            <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 cursor-pointer group transition-colors" onClick={() => {
-                                insertMention(p);
-                                if (window.innerWidth < 768) setShowParticipants(false);
-                            }}>
-                                <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(p))}>
-                                    {p[0].toUpperCase()}
+                    <div className="flex-1 overflow-y-auto p-2 min-w-[18rem]">
+                        <div className="space-y-1">
+                            {participants.length > 0 ? participants.map((p, i) => (
+                                <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 cursor-pointer group transition-colors" onClick={() => {
+                                    insertMention(p);
+                                    if (window.innerWidth < 768) setShowParticipants(false);
+                                }}>
+                                    <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(p))}>
+                                        {p[0].toUpperCase()}
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className={cn("text-sm font-medium", p === username ? "text-primary" : "text-foreground")}>
+                                            {p} {p === username && "(You)"}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground group-hover:text-primary/70 transition-colors">
+                                            Online
+                                        </span>
+                                    </div>
                                 </div>
-                                <div className="flex flex-col">
-                                    <span className={cn("text-sm font-medium", p === username ? "text-primary" : "text-foreground")}>
-                                        {p} {p === username && "(You)"}
-                                    </span>
-                                    <span className="text-[10px] text-muted-foreground group-hover:text-primary/70 transition-colors">
-                                        Online
-                                    </span>
+                            )) : (
+                                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground space-y-2 opacity-50">
+                                    <Users className="h-8 w-8 mb-2" />
+                                    <span className="text-xs">No active participants</span>
                                 </div>
-                            </div>
-                        )) : (
-                            <div className="flex flex-col items-center justify-center h-40 text-muted-foreground space-y-2 opacity-50">
-                                <Users className="h-8 w-8 mb-2" />
-                                <span className="text-xs">No active participants</span>
-                            </div>
-                        )}
+                            )}
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            {/* Mobile Overlay Background (Optional) */}
-            {showParticipants && (
-                <div
-                    className="md:hidden absolute inset-0 bg-background/80 backdrop-blur-sm z-20"
-                    onClick={() => setShowParticipants(false)}
-                />
-            )}
+                {/* Mobile Overlay Background (Optional) */}
+                {showParticipants && (
+                    <div
+                        className="md:hidden absolute inset-0 bg-background/80 backdrop-blur-sm z-20"
+                        onClick={() => setShowParticipants(false)}
+                    />
+                )}
 
-            {/* Re-apply absolute positioning for sidebar on mobile to act as drawer */}
-            <div className={cn(
-                "md:hidden absolute top-0 right-0 h-full bg-background border-l shadow-2xl transition-transform duration-300 ease-in-out z-30 w-72 flex flex-col",
-                showParticipants ? "translate-x-0" : "translate-x-full"
-            )}>
-                <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0 h-[61px]">
-                    <h3 className="font-bold flex items-center gap-2">
-                        Participants
-                        <span className="bg-secondary text-secondary-foreground text-[10px] px-2 py-0.5 rounded-full">{participants.length}</span>
-                    </h3>
-                    <Button variant="ghost" size="icon" onClick={() => setShowParticipants(false)} className="h-8 w-8 rounded-full">
-                        <X className="h-4 w-4" />
-                    </Button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-2">
-                    {/* ... Same list ... */}
-                    <div className="space-y-1">
-                        {participants.map((p, i) => (
-                            <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 cursor-pointer group transition-colors" onClick={() => {
-                                insertMention(p);
-                                setShowParticipants(false);
-                            }}>
-                                <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(p))}>
-                                    {p[0].toUpperCase()}
+                {/* Re-apply absolute positioning for sidebar on mobile to act as drawer */}
+                <div className={cn(
+                    "md:hidden absolute top-0 right-0 h-full bg-background border-l shadow-2xl transition-transform duration-300 ease-in-out z-30 w-72 flex flex-col",
+                    showParticipants ? "translate-x-0" : "translate-x-full"
+                )}>
+                    <div className="p-4 border-b border-border/50 flex items-center justify-between shrink-0 h-[61px]">
+                        <h3 className="font-bold flex items-center gap-2">
+                            Participants
+                            <span className="bg-secondary text-secondary-foreground text-[10px] px-2 py-0.5 rounded-full">{participants.length}</span>
+                        </h3>
+                        <Button variant="ghost" size="icon" onClick={() => setShowParticipants(false)} className="h-8 w-8 rounded-full">
+                            <X className="h-4 w-4" />
+                        </Button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2">
+                        <div className="space-y-1">
+                            {participants.length > 0 ? participants.map((p, i) => (
+                                <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 cursor-pointer group transition-colors" onClick={() => {
+                                    insertMention(p);
+                                    setShowParticipants(false);
+                                }}>
+                                    <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(p))}>
+                                        {p[0].toUpperCase()}
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className={cn("text-sm font-medium", p === username ? "text-primary" : "text-foreground")}>
+                                            {p} {p === username && "(You)"}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground text-primary/70">
+                                            Online
+                                        </span>
+                                    </div>
                                 </div>
-                                <div className="flex flex-col">
-                                    <span className={cn("text-sm font-medium", p === username ? "text-primary" : "text-foreground")}>
-                                        {p} {p === username && "(You)"}
-                                    </span>
-                                    <span className="text-[10px] text-muted-foreground text-primary/70">
-                                        Online
-                                    </span>
+                            )) : (
+                                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground space-y-2 opacity-50">
+                                    <Users className="h-8 w-8 mb-2" />
+                                    <span className="text-xs">No active participants</span>
                                 </div>
-                            </div>
-                        ))}
+                            )}
+                        </div>
                     </div>
                 </div>
+
+                {/* Leave Confirmation Dialog */}
+                {showLeaveConfirm && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <Card className="w-full max-w-sm relative overflow-hidden rounded-[2rem] bg-card border border-border shadow-2xl animate-in zoom-in-95 duration-300 p-6">
+                            <div className="text-center space-y-4">
+                                <div className="mx-auto w-12 h-12 bg-destructive/10 rounded-full flex items-center justify-center">
+                                    <X className="h-6 w-6 text-destructive" />
+                                </div>
+                                <div className="space-y-2">
+                                    <h3 className="text-xl font-bold tracking-tight text-foreground">Leave Chat?</h3>
+                                    <p className="text-sm text-muted-foreground">
+                                        Are you sure you want to leave? Your presence will be removed and you won't receive new messages.
+                                    </p>
+                                </div>
+                                <div className="flex gap-3 pt-2">
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => setShowLeaveConfirm(false)}
+                                        className="flex-1 rounded-full h-11 border-border hover:bg-muted"
+                                    >
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        onClick={confirmLeave}
+                                        className="flex-1 rounded-full h-11 bg-destructive hover:bg-destructive/90 text-destructive-foreground shadow-lg shadow-destructive/20"
+                                    >
+                                        Leave
+                                    </Button>
+                                </div>
+                            </div>
+                        </Card>
+                    </div>
+                )}
             </div>
-
-
         </div>
     );
 }

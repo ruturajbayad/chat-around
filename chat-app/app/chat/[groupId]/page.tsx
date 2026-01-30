@@ -1,10 +1,36 @@
 import ChatRoom from "@/components/ChatRoom";
 
-export default async function ChatPage({ params }: { params: { groupId: string } }) {
-    // We need to await params in Next.js 15+ (actually App Router params are promise-like in some versions, but standard destructuring works in most stable versions. 
-    // However, let's treat it safely or just use simple component prop driling.
-    // The 'params' prop is an object.
-    const { groupId } = await params;
+interface PageProps {
+    params: Promise<{ groupId: string }>;
+}
 
-    return <ChatRoom groupId={groupId} />;
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+async function getGroupName(groupId: string) {
+    try {
+        const { data, error } = await supabase
+            .from('groups')
+            .select('name')
+            .eq('id', groupId)
+            .single();
+
+        if (data) {
+            return data.name;
+        }
+    } catch (error) {
+        console.error('Error fetching group name:', error);
+    }
+    return "Chat Room";
+}
+
+export default async function ChatPage({ params }: PageProps) {
+    const { groupId } = await params;
+    const groupName = await getGroupName(groupId);
+
+    return <ChatRoom groupId={groupId} groupName={groupName} />;
 }
