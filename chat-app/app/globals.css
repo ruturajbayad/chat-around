@@ -83,24 +83,12 @@
         @apply bg-background text-foreground;
     }
 
-    /* Smooth scroll behavior */
     html {
         scroll-behavior: smooth;
     }
-
-    /* Smooth transitions for theme changes */
-    * {
-        transition-property: background-color, border-color, color, fill, stroke;
-        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-        transition-duration: 200ms;
-    }
-
-    /* Exclude specific elements from transition */
-    *:where(:not(.no-transition)) {
-        transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
-    }
 }
-/* View Transitions API styles for theme toggle */
+
+/* View Transitions API - Fixed */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -113,17 +101,4 @@
 
 ::view-transition-new(root) {
   z-index: 9999;
-}
-
-/* Ensure smooth theme transitions on all elements */
-* {
-  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 0ms;
-}
-
-/* Disable transitions during view transition */
-::view-transition-old(root) *,
-::view-transition-new(root) * {
-  transition-duration: 0ms !important;
 }

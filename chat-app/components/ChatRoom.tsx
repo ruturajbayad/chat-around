@@ -52,7 +52,7 @@ const TypingIndicator = () => (
   </div>
 );
 
-export default function ChatRoom({ groupId, groupName }: { groupId: string; groupName?: string }) {
+export default function ChatRoom({ groupId, groupName }: { groupId: string; groupName: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [username, setUsername] = useState("");
@@ -215,7 +215,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
             </div>
             <h1 className="text-2xl font-bold text-foreground dark:text-white tracking-tight">Join Chat</h1>
             <p className="text-black/60 dark:text-white/40 text-sm">
-              Enter your name to join <span className="text-[#D4FF90] font-medium">{groupName || groupId}</span>
+              Enter your name to join <span className="text-[#D4FF90] font-medium">{groupName}</span>
             </p>
           </div>
           
@@ -263,7 +263,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
 
             <div className="flex items-center gap-3 rounded-full bg-white/80 dark:bg-white/5 backdrop-blur-xl border border-[#D4FF90]/30 px-5 py-3 shadow-lg hover:border-[#D4FF90]/60 transition-colors duration-300">
               <div className="flex flex-col">
-                <span className="text-sm font-bold text-foreground dark:text-white leading-tight">{groupName || groupId}</span>
+                <span className="text-sm font-bold text-foreground dark:text-white leading-tight">{groupName}</span>
                 <span className="flex items-center gap-2 text-[10px] text-[#D4FF90] font-medium leading-tight">
                   <span className="h-2 w-2 rounded-full bg-[#D4FF90] animate-pulse" />
                   {userCount} active
@@ -430,7 +430,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
           <Card className="w-full max-w-sm p-8 rounded-[2rem] bg-white/90 dark:bg-white/5 backdrop-blur-2xl border border-[#D4FF90]/30 shadow-2xl space-y-6 text-center transform scale-100 animate-in zoom-in-95 duration-200">
             <div className="space-y-2">
-              <h3 className="text-lg font-bold text-foreground dark:text-white">Leave {groupName || groupId}?</h3>
+              <h3 className="text-lg font-bold text-foreground dark:text-white">Leave {groupName}?</h3>
               <p className="text-sm text-black/60 dark:text-white/60">
                 You&apos;ll stop receiving messages from this room.
               </p>
