@@ -5,10 +5,11 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { importKey, encryptMessage, decryptMessage } from '@/lib/crypto';
 import { Button, Input, Card } from './ui/basic';
-import { Send, ArrowLeft, Reply, X, Users, Plus } from 'lucide-react';
+import { Send, ArrowLeft, Reply, X, Users, Plus, Smile } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, PanInfo } from "framer-motion";
 import ModeToggle from "./ModeToggle";
+import EmojiPickerPopover from './EmojiPicker';
 
 interface ReplyContext {
     id: string;
@@ -59,7 +60,9 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
     const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
     const [replyingTo, setReplyingTo] = useState<Message | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
 
+    const emojiPickerRef = useRef<HTMLDivElement>(null)
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const router = useRouter();
@@ -116,6 +119,15 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                 setError('Invalid encryption key.');
             }
         };
+
+        // emoji picker click outside handler
+        const handleClickOutside = (event: MouseEvent) => {
+            if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
+                setIsEmojiPickerOpen(false);
+            }
+        };
+        
+        document.addEventListener('mousedown', handleClickOutside);
         init();
     }, []);
 
@@ -626,6 +638,15 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                         )}
 
                         <form onSubmit={sendMessage} className="flex gap-2">
+                            <div className='relative flex justify-center items-center rounded-full shrink-0 h-11 w-11 shadow-md bg-secondary hover:bg-accent transition-all'>
+                                <div ref={emojiPickerRef}>
+                                    {isEmojiPickerOpen && <EmojiPickerPopover onSelect={(emoji) => {
+                                        setInput(prev => prev + emoji);
+                                    }} />
+                                    }
+                                </div>
+                                <Smile onClick={()=>setIsEmojiPickerOpen(isOpen=>!isOpen)} />
+                            </div>
                             <Input
                                 ref={inputRef}
                                 value={input}
@@ -637,6 +658,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                                 placeholder={replyingTo ? "Type your reply..." : "Type a message..."}
                                 className="flex-1 rounded-full border-input focus-visible:ring-ring bg-secondary/50 h-11 px-5"
                             />
+                            
                             <Button
                                 type="submit"
                                 size="icon"
@@ -646,7 +668,7 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                                 )}
                                 disabled={!input.trim()}
                             >
-                                <Send className="h-5 w-5 ml-0.5" />
+                                <Send className="h-5 w-5 " />
                             </Button>
                         </form>
                     </div>
