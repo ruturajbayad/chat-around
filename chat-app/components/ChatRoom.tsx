@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { importKey, encryptMessage, decryptMessage } from '@/lib/crypto';
 import { Button, Input, Card } from './ui/basic';
-import { Send, ArrowLeft, Reply, X, Users, Plus } from 'lucide-react';
+import { Send, ArrowLeft, Reply, X, Users, Plus, Smile } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, PanInfo } from "framer-motion";
 import ModeToggle from "./ModeToggle";
@@ -21,6 +21,12 @@ interface MessageContent {
     replyTo?: ReplyContext;
 }
 
+interface Reaction {
+    emoji: string;
+    count: number;
+    users: string[]; // Track who reacted for highlighting
+}
+
 interface Message {
     id: string;
     sender: string;
@@ -28,6 +34,7 @@ interface Message {
     timestamp: string;
     isSystem?: boolean;
     encryptedPayload?: string; // Add this for internal use before decryption
+    reactions?: Reaction[]; // Add reactions to messages
 }
 
 // Avatar color generator based on username
@@ -59,6 +66,10 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
     const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
     const [replyingTo, setReplyingTo] = useState<Message | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
+    const [expandedReactions, setExpandedReactions] = useState<Set<string>>(new Set());
+    const [hoveredReaction, setHoveredReaction] = useState<{ messageId: string; emoji: string } | null>(null);
+    const [showAllReactionsModal, setShowAllReactionsModal] = useState<string | null>(null);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -95,6 +106,20 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
             inputRef.current?.focus();
         }
     }, [replyingTo]);
+
+    // Close reaction picker when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (showReactionPicker) {
+                const target = e.target as HTMLElement;
+                if (!target.closest('.reaction-picker') && !target.closest('.reaction-trigger')) {
+                    setShowReactionPicker(null);
+                }
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showReactionPicker]);
 
     // Initialize encryption key
     useEffect(() => {
@@ -162,8 +187,55 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
             }
         };
 
+        const handleReaction = (payload: any) => {
+            setMessages(prev => prev.map(msg => {
+                if (msg.id === payload.messageId) {
+                    const reactions = msg.reactions || [];
+                    const existingReaction = reactions.find(r => r.emoji === payload.emoji);
+
+                    if (existingReaction) {
+                        // Check if user already reacted with this emoji
+                        if (existingReaction.users.includes(payload.username)) {
+                            // Remove user's reaction
+                            const updatedUsers = existingReaction.users.filter(u => u !== payload.username);
+                            if (updatedUsers.length === 0) {
+                                // Remove emoji if no users left
+                                return { ...msg, reactions: reactions.filter(r => r.emoji !== payload.emoji) };
+                            }
+                            return {
+                                ...msg,
+                                reactions: reactions.map(r =>
+                                    r.emoji === payload.emoji
+                                        ? { ...r, count: r.count - 1, users: updatedUsers }
+                                        : r
+                                )
+                            };
+                        } else {
+                            // Add user's reaction
+                            return {
+                                ...msg,
+                                reactions: reactions.map(r =>
+                                    r.emoji === payload.emoji
+                                        ? { ...r, count: r.count + 1, users: [...r.users, payload.username] }
+                                        : r
+                                )
+                            };
+                        }
+                    } else {
+                        // New reaction
+                        return {
+                            ...msg,
+                            reactions: [...reactions, { emoji: payload.emoji, count: 1, users: [payload.username] }]
+                        };
+                    }
+                }
+                return msg;
+            }));
+        };
+
         channel
             .on('broadcast', { event: 'message' }, ({ payload }) => handleMessage(payload))
+            .on('broadcast', { event: 'reaction' }, ({ payload }) => handleReaction(payload))
             .on('presence', { event: 'sync' }, () => {
                 const newState = channel.presenceState();
                 const users = Object.keys(newState).filter(k => k && k !== 'undefined');
@@ -314,6 +386,111 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
         } catch (err) {
             console.error(err);
         }
+    };
+
+    const handleReaction = async (messageId: string, emoji: string) => {
+        try {
+            // Update local state immediately (optimistic update)
+            setMessages(prev => prev.map(msg => {
+                if (msg.id === messageId) {
+                    const reactions = msg.reactions || [];
+                    const existingReaction = reactions.find(r => r.emoji === emoji);
+
+                    if (existingReaction) {
+                        // Check if user already reacted with this emoji
+                        if (existingReaction.users.includes(username)) {
+                            // Remove user's reaction
+                            const updatedUsers = existingReaction.users.filter(u => u !== username);
+                            if (updatedUsers.length === 0) {
+                                // Remove emoji if no users left
+                                return { ...msg, reactions: reactions.filter(r => r.emoji !== emoji) };
+                            }
+                            return {
+                                ...msg,
+                                reactions: reactions.map(r =>
+                                    r.emoji === emoji
+                                        ? { ...r, count: r.count - 1, users: updatedUsers }
+                                        : r
+                                )
+                            };
+                        } else {
+                            // Add user's reaction
+                            return {
+                                ...msg,
+                                reactions: reactions.map(r =>
+                                    r.emoji === emoji
+                                        ? { ...r, count: r.count + 1, users: [...r.users, username] }
+                                        : r
+                                )
+                            };
+                        }
+                    } else {
+                        // New reaction
+                        return {
+                            ...msg,
+                            reactions: [...reactions, { emoji, count: 1, users: [username] }]
+                        };
+                    }
+                }
+                return msg;
+            }));
+
+            // Broadcast to others
+            await supabase.channel(`room:${groupId}`).send({
+                type: 'broadcast',
+                event: 'reaction',
+                payload: {
+                    messageId,
+                    emoji,
+                    username
+                }
+            });
+            setShowReactionPicker(null);
+        } catch (err) {
+            console.error('Failed to send reaction', err);
+        }
+    };
+
+    // Common emoji reactions
+    const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👏'];
+
+    // Maximum reactions to show before collapsing
+    const MAX_VISIBLE_REACTIONS = 3;
+
+    // Sort reactions by count (descending), then by order
+    const sortReactions = (reactions: Reaction[]) => {
+        return [...reactions].sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return 0;
+        });
+    };
+
+    // Get displayed reactions for a message
+    const getDisplayedReactions = (messageId: string, reactions: Reaction[]) => {
+        const sorted = sortReactions(reactions);
+        const isExpanded = expandedReactions.has(messageId);
+
+        if (isExpanded || sorted.length <= MAX_VISIBLE_REACTIONS) {
+            return { displayed: sorted, hidden: [] };
+        }
+
+        return {
+            displayed: sorted.slice(0, MAX_VISIBLE_REACTIONS),
+            hidden: sorted.slice(MAX_VISIBLE_REACTIONS)
+        };
+    };
+
+    // Toggle expanded reactions for a message
+    const toggleExpandReactions = (messageId: string) => {
+        setExpandedReactions(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(messageId)) {
+                newSet.delete(messageId);
+            } else {
+                newSet.add(messageId);
+            }
+            return newSet;
+        });
     };
 
     if (error) {
@@ -573,14 +750,168 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                                                 <button
                                                     onClick={() => setReplyingTo(msg)}
                                                     className={cn(
-                                                        "hidden md:block absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/bubble:opacity-100 transition-opacity p-1.5 rounded-full bg-background shadow-sm border hover:bg-accent",
+                                                        "absolute top-1/2 -translate-y-1/2 transition-opacity p-1.5 rounded-full bg-background shadow-sm border hover:bg-accent",
+                                                        "md:opacity-0 md:group-hover/bubble:opacity-100",
+                                                        "opacity-0 group-hover/bubble:opacity-100",
                                                         isMe ? "-left-10" : "-right-10"
                                                     )}
                                                     title="Reply"
                                                 >
                                                     <Reply className="h-4 w-4 text-muted-foreground" />
                                                 </button>
+
+                                                <button
+                                                    onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)}
+                                                    className={cn(
+                                                        "reaction-trigger absolute top-1/2 -translate-y-1/2 transition-opacity p-1.5 rounded-full bg-background shadow-sm border hover:bg-accent",
+                                                        "md:opacity-0 md:group-hover/bubble:opacity-100",
+                                                        "opacity-0 group-hover/bubble:opacity-100",
+                                                        isMe ? "-left-20" : "-right-20"
+                                                    )}
+                                                    title="React"
+                                                >
+                                                    <Smile className="h-4 w-4 text-muted-foreground" />
+                                                </button>
                                             </div>
+
+                                            {/* Reaction Display */}
+                                            {msg.reactions && msg.reactions.length > 0 && (
+                                                <div className="flex flex-wrap gap-1 mt-1.5 px-1 relative">
+                                                    {(() => {
+                                                        const { displayed, hidden } = getDisplayedReactions(msg.id, msg.reactions);
+                                                        const totalHiddenCount = hidden.reduce((sum, r) => sum + r.count, 0);
+                                                        const totalCount = msg.reactions.reduce((sum, r) => sum + r.count, 0);
+
+                                                        return (
+                                                            <>
+                                                                {displayed.map((reaction, idx) => {
+                                                                    const hasReacted = reaction.users.includes(username);
+                                                                    const isHovered = hoveredReaction?.messageId === msg.id && hoveredReaction?.emoji === reaction.emoji;
+
+                                                                    return (
+                                                                        <div key={idx} className="relative group/reaction">
+                                                                            <button
+                                                                                onClick={() => handleReaction(msg.id, reaction.emoji)}
+                                                                                onMouseEnter={() => setHoveredReaction({ messageId: msg.id, emoji: reaction.emoji })}
+                                                                                onMouseLeave={() => setHoveredReaction(null)}
+                                                                                className={cn(
+                                                                                    "inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all hover:scale-110 border shadow-sm",
+                                                                                    hasReacted
+                                                                                        ? "bg-primary/20 border-primary/60 text-primary ring-1 ring-primary/20"
+                                                                                        : "bg-secondary/80 border-border/60 hover:bg-secondary hover:border-border"
+                                                                                )}
+                                                                            >
+                                                                                <span className="text-sm">{reaction.emoji}</span>
+                                                                                <span className={cn(
+                                                                                    "text-[10px] font-semibold",
+                                                                                    hasReacted ? "text-primary" : "text-muted-foreground"
+                                                                                )}>{reaction.count}</span>
+                                                                            </button>
+
+                                                                            {/* Tooltip showing who reacted */}
+                                                                            {isHovered && (
+                                                                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-[100] animate-in fade-in zoom-in-95 duration-200 pointer-events-none">
+                                                                                    <div className="bg-popover border shadow-xl rounded-lg px-3 py-2 min-w-[120px] max-w-[200px]">
+                                                                                        <div className="flex items-center gap-2 mb-1.5">
+                                                                                            <span className="text-lg">{reaction.emoji}</span>
+                                                                                            <span className="text-xs font-semibold text-foreground/80">
+                                                                                                {reaction.count} {reaction.count === 1 ? 'person' : 'people'}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        <div className="space-y-1">
+                                                                                            {reaction.users.slice(0, 10).map((user, i) => (
+                                                                                                <div key={i} className="flex items-center gap-2">
+                                                                                                    <div className={cn("w-4 h-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold", getAvatarColor(user))}>
+                                                                                                        {user[0].toUpperCase()}
+                                                                                                    </div>
+                                                                                                    <span className={cn(
+                                                                                                        "text-xs",
+                                                                                                        user === username ? "font-bold text-primary" : "text-foreground/80"
+                                                                                                    )}>
+                                                                                                        {user === username ? 'You' : user}
+                                                                                                    </span>
+                                                                                                </div>
+                                                                                            ))}
+                                                                                            {reaction.users.length > 10 && (
+                                                                                                <span className="text-[10px] text-muted-foreground">
+                                                                                                    +{reaction.users.length - 10} more
+                                                                                                </span>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    </div>
+                                                                                    <div className="w-2 h-2 bg-popover border-r border-b rotate-45 absolute top-full left-1/2 -translate-x-1/2 -translate-y-1/2"></div>
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    );
+                                                                })}
+
+                                                                {/* Show +X more button if reactions are hidden */}
+                                                                {hidden.length > 0 && (
+                                                                    <button
+                                                                        onClick={() => toggleExpandReactions(msg.id)}
+                                                                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all hover:scale-110 border bg-secondary/50 border-border/50 hover:bg-secondary text-muted-foreground"
+                                                                        title="Show more reactions"
+                                                                    >
+                                                                        <Plus className="h-3 w-3" />
+                                                                        <span className="text-[10px] font-semibold">{totalHiddenCount}</span>
+                                                                    </button>
+                                                                )}
+
+                                                                {/* View all reactions button (shown when 5+ reactions) */}
+                                                                {totalCount >= 5 && (
+                                                                    <button
+                                                                        onClick={() => setShowAllReactionsModal(msg.id)}
+                                                                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all hover:scale-105 border border-border/50 bg-accent/50 hover:bg-accent text-muted-foreground hover:text-foreground"
+                                                                        title="View all reactions"
+                                                                    >
+                                                                        <span className="text-[10px] font-semibold">View all</span>
+                                                                    </button>
+                                                                )}
+
+                                                                {/* Add reaction button */}
+                                                                <button
+                                                                    onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)}
+                                                                    className="reaction-trigger inline-flex items-center justify-center w-7 h-7 rounded-full text-xs transition-all hover:scale-110 border border-border/50 bg-secondary/30 hover:bg-secondary/80"
+                                                                    title="Add reaction"
+                                                                >
+                                                                    <Plus className="h-3 w-3" />
+                                                                </button>
+                                                            </>
+                                                        );
+                                                    })()}
+                                                </div>
+                                            )}
+
+                                            {/* Reaction Picker */}
+                                            {showReactionPicker === msg.id && (
+                                                <div className={cn(
+                                                    "reaction-picker absolute z-50 mt-2 bg-popover/95 backdrop-blur-sm border shadow-2xl rounded-2xl p-2.5 flex gap-1.5 animate-in fade-in zoom-in-95 duration-200",
+                                                    isMe ? "right-0" : "left-0"
+                                                )}>
+                                                    {quickReactions.map((emoji, idx) => {
+                                                        const hasReacted = msg.reactions?.find(r => r.emoji === emoji)?.users.includes(username);
+                                                        return (
+                                                            <button
+                                                                key={idx}
+                                                                onClick={() => handleReaction(msg.id, emoji)}
+                                                                className={cn(
+                                                                    "w-10 h-10 flex items-center justify-center rounded-xl transition-all text-xl relative group/emoji",
+                                                                    hasReacted
+                                                                        ? "bg-primary/20 ring-2 ring-primary/50 scale-105"
+                                                                        : "hover:bg-accent hover:scale-125"
+                                                                )}
+                                                                title={emoji}
+                                                            >
+                                                                <span className="group-hover/emoji:scale-110 transition-transform">{emoji}</span>
+                                                                {hasReacted && (
+                                                                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full border-2 border-popover"></div>
+                                                                )}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
                                         </div>
                                     </motion.div>
                                 </motion.div>
@@ -703,6 +1034,88 @@ export default function ChatRoom({ groupId, groupName }: { groupId: string; grou
                         </div>
                     </div>
                 </div>
+
+                {/* All Reactions Summary Modal */}
+                {showAllReactionsModal && (() => {
+                    const message = messages.find(m => m.id === showAllReactionsModal);
+                    if (!message || !message.reactions || message.reactions.length === 0) return null;
+
+                    const sortedReactions = sortReactions(message.reactions);
+                    const totalReactions = sortedReactions.reduce((sum, r) => sum + r.count, 0);
+
+                    return (
+                        <div
+                            className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+                            onClick={() => setShowAllReactionsModal(null)}
+                        >
+                            <Card
+                                className="w-full max-w-md relative overflow-hidden rounded-3xl bg-card border border-border shadow-2xl animate-in zoom-in-95 duration-300"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                {/* Header */}
+                                <div className="p-4 border-b border-border/50 flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="text-lg font-bold tracking-tight text-foreground">Reactions</h3>
+                                        <span className="bg-secondary text-secondary-foreground text-xs px-2 py-0.5 rounded-full font-medium">
+                                            {totalReactions}
+                                        </span>
+                                    </div>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => setShowAllReactionsModal(null)}
+                                        className="h-8 w-8 rounded-full hover:bg-secondary"
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </Button>
+                                </div>
+
+                                {/* Reactions List */}
+                                <div className="max-h-[60vh] overflow-y-auto p-4 space-y-3">
+                                    {sortedReactions.map((reaction, idx) => (
+                                        <div key={idx} className="space-y-2">
+                                            <div className="flex items-center gap-2 sticky top-0 bg-card/95 backdrop-blur-sm py-1 z-10">
+                                                <span className="text-2xl">{reaction.emoji}</span>
+                                                <span className="text-sm font-semibold text-foreground/80">
+                                                    {reaction.count} {reaction.count === 1 ? 'reaction' : 'reactions'}
+                                                </span>
+                                            </div>
+                                            <div className="space-y-1.5 pl-2">
+                                                {reaction.users.map((user, i) => (
+                                                    <div key={i} className="flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 transition-colors">
+                                                        <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm", getAvatarColor(user))}>
+                                                            {user[0].toUpperCase()}
+                                                        </div>
+                                                        <span className={cn(
+                                                            "text-sm font-medium",
+                                                            user === username ? "text-primary" : "text-foreground"
+                                                        )}>
+                                                            {user === username ? 'You' : user}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Footer with quick actions */}
+                                <div className="p-4 border-t border-border/50 bg-secondary/20">
+                                    <div className="flex gap-2 justify-end">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setShowAllReactionsModal(null)}
+                                            className="rounded-full"
+                                        >
+                                            Close
+                                        </Button>
+                                    </div>
+                                </div>
+                            </Card>
+                        </div>
+                    );
+                })()}
 
                 {/* Leave Confirmation Dialog */}
                 {showLeaveConfirm && (
